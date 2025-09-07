@@ -176,8 +176,9 @@ src/
 ├── email/
 │   ├── providers/
 │   │   ├── gmail.provider.ts    # Gmail API integration
-│   │   └── outlook.provider.ts  # Placeholder for Outlook
-│   ├── email.controller.ts      # API endpoints
+│   │   └── outlook.provider.ts  # Microsoft Graph API integration
+│   ├── email.controller.ts      # Gmail API endpoints
+│   ├── outlook.controller.ts    # Outlook API endpoints
 │   ├── email.service.ts         # Business logic
 │   └── email.module.ts          # Module configuration
 ├── common/

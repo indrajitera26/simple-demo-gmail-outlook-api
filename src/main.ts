@@ -35,10 +35,11 @@ async function bootstrap() {
     );
 
     const config = new DocumentBuilder()
-      .setTitle('Gmail Email API')
-      .setDescription('Simple demo API for fetching emails from Gmail using OAuth2')
+      .setTitle('Gmail and Outlook Email API')
+      .setDescription('Simple demo API for fetching emails from Gmail and Outlook using OAuth2')
       .setVersion('1.0.0')
       .addTag('Gmail', 'Gmail email operations')
+      .addTag('Outlook', 'Outlook email operations')
       .build();
     
     const document = SwaggerModule.createDocument(app, config);
