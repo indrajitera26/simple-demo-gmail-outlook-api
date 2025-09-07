@@ -1,25 +1,30 @@
-# Gmail Email API
+# Gmail and Outlook Email API
 
-A simple NestJS backend API for fetching emails from Gmail using OAuth2 authentication with session-based token storage.
+A simple NestJS backend API for fetching emails from Gmail and Outlook using OAuth2 authentication with session-based token storage.
 
 ## Features
 
-### Gmail Integration
+### Gmail Integration ✅
 - OAuth2 authentication with session storage
 - List messages with pagination (up to 500 messages)
 - Get individual message details
 - Simplified email format for easy consumption
 - Comprehensive error handling
-- Swagger API documentation
 
-### Outlook Integration
-- Placeholder implementation (not yet implemented)
+### Outlook Integration ✅
+- Microsoft OAuth2 authentication with session storage
+- List messages with pagination
+- Get individual message details with attachments
+- Search messages with Microsoft Graph query syntax
+- Special handling for .ics calendar files
+- Attachment download support
 
 ## Prerequisites
 
 - Node.js (v16 or higher)
 - Yarn or npm
 - Gmail API credentials (OAuth2)
+- Microsoft Azure App Registration (for Outlook)
 
 ## Quick Start
 
@@ -82,13 +87,19 @@ Interactive Swagger documentation: `http://localhost:3000/api`
 
 ## API Endpoints
 
-### Authentication
+### Gmail
 - `GET /gmail/auth/url` - Get Gmail OAuth2 authorization URL
-- `GET /gmail/auth/status` - Check current authentication status
+- `GET /gmail/auth/status` - Check Gmail authentication status
+- `GET /gmail/messages?maxResults=10` - List Gmail messages
+- `GET /gmail/messages/:id` - Get specific Gmail message
 
-### Messages
-- `GET /gmail/messages?maxResults=10` - List messages (default: 10, max: 500)
-- `GET /gmail/messages/:id` - Get specific message details
+### Outlook
+- `GET /outlook/auth/url` - Get Outlook OAuth2 authorization URL
+- `GET /outlook/auth/status` - Check Outlook authentication status
+- `GET /outlook/messages?maxResults=10` - List Outlook messages
+- `GET /outlook/messages/:id` - Get specific Outlook message
+- `GET /outlook/messages/search?query=from:sender@example.com` - Search messages
+- `GET /outlook/messages/:messageId/attachments/:attachmentId` - Get attachment
 
 ## Response Format
 
