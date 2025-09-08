@@ -6,7 +6,8 @@ import {
   Session, 
   UnauthorizedException,
   ParseIntPipe,
-  DefaultValuePipe
+  DefaultValuePipe,
+  HttpStatus
 } from '@nestjs/common';
 import { 
   ApiTags, 
@@ -27,7 +28,7 @@ export class EmailController {
   @Get('auth/url')
   @ApiOperation({ summary: 'Get Gmail OAuth2 authorization URL' })
   @ApiResponse({ 
-    status: 200, 
+    status: HttpStatus.OK, 
     description: 'Returns the Gmail authorization URL',
     schema: {
       properties: {
@@ -49,7 +50,7 @@ export class EmailController {
     session.gmailTokens = tokens;
     
     return {
-      message: 'Authentication successful! Tokens stored in session.',
+      message: 'Authentication successful',
       hasTokens: true,
     };
   }
@@ -57,7 +58,7 @@ export class EmailController {
   @Get('auth/status')
   @ApiOperation({ summary: 'Check Gmail authentication status' })
   @ApiResponse({ 
-    status: 200, 
+    status: HttpStatus.OK, 
     description: 'Returns current authentication status',
     schema: {
       properties: {
@@ -66,10 +67,11 @@ export class EmailController {
       }
     }
   })
-  async getAuthStatus(@Session() session: Record<string, any>): Promise<{ authenticated: boolean; message: string }> {
+  getAuthStatus(@Session() session: Record<string, any>): { authenticated: boolean; message: string } {
+    const isAuthenticated = !!session.gmailTokens;
     return {
-      authenticated: !!session.gmailTokens,
-      message: session.gmailTokens ? 'Authenticated with Gmail' : 'Not authenticated',
+      authenticated: isAuthenticated,
+      message: isAuthenticated ? 'Authenticated with Gmail' : 'Not authenticated',
     };
   }
 
@@ -82,14 +84,14 @@ export class EmailController {
     type: Number
   })
   @ApiResponse({ 
-    status: 200, 
+    status: HttpStatus.OK, 
     description: 'Returns list of Gmail messages',
     type: [EmailResponseDto]
   })
-  @ApiResponse({ status: 401, description: 'Authentication required' })
+  @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: 'Authentication required' })
   async getMessages(
     @Query('maxResults', new DefaultValuePipe(10), new ParseIntPipe({ optional: true })) 
-    maxResults: number = 10,
+    maxResults: number,
     @Session() session: Record<string, any>
   ): Promise<EmailResponseDto[]> {
     this.validateAuthentication(session);
@@ -107,12 +109,12 @@ export class EmailController {
     type: String 
   })
   @ApiResponse({ 
-    status: 200, 
+    status: HttpStatus.OK, 
     description: 'Returns the Gmail message details',
     type: EmailResponseDto
   })
-  @ApiResponse({ status: 401, description: 'Authentication required' })
-  @ApiResponse({ status: 404, description: 'Message not found' })
+  @ApiResponse({ status: HttpStatus.UNAUTHORIZED, description: 'Authentication required' })
+  @ApiResponse({ status: HttpStatus.NOT_FOUND, description: 'Message not found' })
   async getMessage(
     @Param('id') id: string,
     @Session() session: Record<string, any>
@@ -124,7 +126,7 @@ export class EmailController {
 
   private validateAuthentication(session: Record<string, any>): void {
     if (!session.gmailTokens) {
-      throw new UnauthorizedException('Gmail authentication required. Please authenticate first by visiting /gmail/auth/url');
+      throw new UnauthorizedException('Authentication required. Please authenticate first.');
     }
   }
 }
