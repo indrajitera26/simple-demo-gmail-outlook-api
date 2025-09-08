@@ -203,6 +203,7 @@ export class OutlookProvider {
     }
 
     try {
+      // Create Graph client
       const client = this.createGraphClient(tokens.accessToken);
       
       const response = await client
