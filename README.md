@@ -1,23 +1,27 @@
 # Gmail and Outlook Email API
 
-A simple NestJS backend API for fetching emails from Gmail and Outlook using OAuth2 authentication with session-based token storage.
+A production-ready NestJS backend API for fetching emails from Gmail and Outlook using OAuth2 authentication with session-based token storage. Built with NestJS best practices, automatic token refresh, and comprehensive ICS calendar file support.
 
-## Features
+## 🚀 Features
 
 ### Gmail Integration ✅
-- OAuth2 authentication with session storage
+- OAuth2 authentication with automatic session management
 - List messages with pagination (up to 500 messages)
-- Get individual message details
-- Simplified email format for easy consumption
-- Comprehensive error handling
+- Get individual message details with full metadata
+- Automatic ICS calendar file detection and parsing
+- Attachment processing with calendar event extraction
+- Comprehensive error handling with NestJS exceptions
+- Token refresh handling with Google OAuth2
 
-### Outlook Integration ✅
-- Microsoft OAuth2 authentication with session storage
-- List messages with pagination
-- Get individual message details with attachments
-- Search messages with Microsoft Graph query syntax
-- Special handling for .ics calendar files
-- Attachment download support
+### Outlook Integration ✅  
+- Microsoft Graph API OAuth2 authentication (Multi-tenant + Personal accounts)
+- List messages with pagination and automatic token refresh
+- Get individual message details with full attachment support
+- Advanced search with Microsoft Graph query syntax
+- ICS calendar file detection, parsing, and event extraction
+- Attachment download with content type detection
+- Proactive token expiration management
+- Support for both organizational and personal Microsoft accounts
 
 ## Prerequisites
 
@@ -48,24 +52,25 @@ yarn install
    - Add authorized redirect URI: `http://localhost:3000/gmail/auth/callback`
 5. Copy the Client ID and Client Secret
 
-### 3. Configure Outlook API
+### 3. Configure Outlook API (Multi-tenant + Personal)
 
 1. Go to [Azure Portal](https://portal.azure.com/)
 2. Navigate to "Azure Active Directory" > "App registrations"
 3. Click "New registration":
-   - Name: Your app name (e.g., "Email API")
-   - Supported account types: "Accounts in any organizational directory and personal Microsoft accounts"
-   - Redirect URI: Web platform - `http://localhost:3000/outlook/auth/callback`
-4. After creation, note the Application (client) ID
+   - **Name**: Your app name (e.g., "Email API")
+   - **Supported account types**: "Accounts in any organizational directory and personal Microsoft accounts (e.g. Skype, Xbox)"
+   - **Redirect URI**: Web platform - `http://localhost:3000/outlook/auth/callback`
+4. After creation, note the **Application (client) ID**
 5. Go to "Certificates & secrets":
    - Click "New client secret"
-   - Add a description and choose expiry
-   - Copy the secret value immediately (it won't be shown again)
+   - Add description and choose expiry (recommend 24 months)
+   - **Copy the secret value immediately** (it won't be shown again)
 6. Go to "API permissions":
    - Click "Add a permission" > "Microsoft Graph"
    - Select "Delegated permissions"
-   - Add: `Mail.Read`, `User.Read`
-   - Click "Grant admin consent" if you're an admin
+   - Add: `Mail.Read`, `User.Read`, `offline_access`
+   - Click "Grant admin consent" (optional, users can consent individually)
+7. **Important**: Set tenant to `common` in your `.env` file for multi-tenant support
 
 ### 4. Environment Setup
 
@@ -83,11 +88,12 @@ GMAIL_CLIENT_ID=your-client-id.apps.googleusercontent.com
 GMAIL_CLIENT_SECRET=your-client-secret
 GMAIL_REDIRECT_URI=http://localhost:3000/gmail/auth/callback
 
-# Outlook Configuration
+# Outlook Configuration (Multi-tenant + Personal accounts)
 OUTLOOK_CLIENT_ID=your-azure-app-client-id
 OUTLOOK_CLIENT_SECRET=your-azure-app-client-secret
 OUTLOOK_TENANT_ID=common
 OUTLOOK_REDIRECT_URI=http://localhost:3000/outlook/auth/callback
+OUTLOOK_USE_COMMON=true
 ```
 
 ### 5. Run the Application
@@ -137,10 +143,9 @@ Interactive Swagger documentation: `http://localhost:3000/api`
 - `GET /outlook/messages/search?query=from:sender@example.com` - Search messages
 - `GET /outlook/messages/:messageId/attachments/:attachmentId` - Get attachment
 
-## Response Format
+## 📋 Response Format
 
-All messages return in simplified format:
-
+### Standard Email Response
 ```json
 {
   "id": "message-id",
@@ -150,9 +155,37 @@ All messages return in simplified format:
   "to": "recipient@example.com",
   "subject": "Email subject",
   "date": "Wed, 04 Sep 2024 10:30:00 +0000",
-  "body": "Email content in plain text"
+  "body": "Email content in plain text",
+  "hasAttachments": true,
+  "attachments": [
+    {
+      "id": "attachment-id",
+      "name": "meeting-invite.ics",
+      "contentType": "text/calendar",
+      "size": 2048,
+      "isInline": false,
+      "isCalendarEvent": true,
+      "icsContent": "BEGIN:VCALENDAR...",
+      "parsedEvent": {
+        "title": "Team Meeting",
+        "startDate": "20240905T100000Z",
+        "endDate": "20240905T110000Z",
+        "location": "Conference Room A",
+        "description": "Weekly team sync",
+        "organizer": "organizer@company.com"
+      }
+    }
+  ]
 }
 ```
+
+### 📅 ICS Calendar File Features
+When emails contain `.ics` calendar files, the API automatically:
+- Detects calendar attachments by content type and filename
+- Extracts and decodes ICS content  
+- Parses key event details (title, dates, location, organizer, description)
+- Includes both raw ICS content and parsed event data
+- Works for both Gmail and Outlook attachments
 
 ## Error Handling
 
@@ -161,13 +194,25 @@ All messages return in simplified format:
 - `400 Bad Request` - Invalid request parameters
 - `500 Internal Server Error` - Server errors
 
-## Security Features
+## 🔒 Security Features
 
-- Session-based token storage
-- HTTPS-only cookies in production
-- HttpOnly cookies to prevent XSS
-- Input validation and sanitization
-- Rate limiting for message fetching
+- **Session-based token storage** - Secure server-side token management
+- **Automatic token refresh** - Proactive token renewal before expiration
+- **Multi-tenant authentication** - Support for organizational and personal accounts  
+- **Input validation** - NestJS built-in validation with proper DTOs
+- **Error handling** - Comprehensive exception handling with meaningful messages
+- **Rate limiting** - Message fetching limits (max 500 per request)
+- **Secure credentials** - Environment-based configuration management
+
+## 🏗️ Architecture & Best Practices
+
+- **NestJS Framework** - Enterprise-grade Node.js framework
+- **Dependency Injection** - Clean, testable service architecture
+- **Provider Pattern** - Separate Gmail and Outlook implementations
+- **DTO Validation** - Strong TypeScript typing with Swagger documentation
+- **Error Boundaries** - Proper exception handling at all layers
+- **Session Management** - Stateful authentication with automatic cleanup
+- **Modular Design** - Clean separation of concerns
 
 ## Project Structure
 

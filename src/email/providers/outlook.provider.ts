@@ -1,8 +1,25 @@
-import { Injectable, Logger, InternalServerErrorException, BadRequestException, NotFoundException } from '@nestjs/common';
+import { 
+  Injectable, 
+  Logger, 
+  InternalServerErrorException, 
+  BadRequestException, 
+  NotFoundException 
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ConfidentialClientApplication } from '@azure/msal-node';
 import { Client } from '@microsoft/microsoft-graph-client';
 import 'isomorphic-fetch';
+
+interface TokenSet {
+  accessToken: string;
+  account: any;
+  expiresOn: Date;
+}
+
+interface ProcessedMessage {
+  messages: any[];
+  updatedTokens?: TokenSet;
+}
 
 @Injectable()
 export class OutlookProvider {
@@ -21,40 +38,39 @@ export class OutlookProvider {
     const tenantId = this.configService.get<string>('OUTLOOK_TENANT_ID', 'common');
 
     if (!clientId || !clientSecret) {
-      const message = 'Outlook OAuth2 credentials not configured. Please set OUTLOOK_CLIENT_ID and OUTLOOK_CLIENT_SECRET in .env file';
-      this.logger.error(message);
-      throw new InternalServerErrorException(message);
+      throw new InternalServerErrorException('Outlook OAuth2 credentials not configured');
     }
 
-    const msalConfig = {
-      auth: {
-        clientId,
-        authority: `https://login.microsoftonline.com/${tenantId}`,
-        clientSecret,
-      },
-    };
+    const useCommonAuth = this.configService.get<string>('OUTLOOK_USE_COMMON', 'true') === 'true';
+    const authority = useCommonAuth 
+      ? 'https://login.microsoftonline.com/common'
+      : `https://login.microsoftonline.com/${tenantId}`;
 
-    this.msalClient = new ConfidentialClientApplication(msalConfig);
-    this.logger.log('Outlook MSAL client initialized successfully');
+    this.msalClient = new ConfidentialClientApplication({
+      auth: { clientId, authority, clientSecret },
+    });
   }
 
   async getAuthUrl(): Promise<string> {
     try {
       const authCodeUrlParameters = {
-        scopes: ['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read'],
+        scopes: [
+          'https://graph.microsoft.com/Mail.Read',
+          'https://graph.microsoft.com/User.Read',
+          'offline_access'
+        ],
         redirectUri: this.redirectUri,
-        prompt: 'consent',
+        prompt: 'login',
+        domainHint: 'organizations',
       };
 
-      const authUrl = await this.msalClient.getAuthCodeUrl(authCodeUrlParameters);
-      return authUrl;
+      return await this.msalClient.getAuthCodeUrl(authCodeUrlParameters);
     } catch (error) {
-      this.logger.error('Failed to generate auth URL', error);
       throw new InternalServerErrorException('Failed to generate authentication URL');
     }
   }
 
-  async getTokenFromCode(code: string): Promise<any> {
+  async getTokenFromCode(code: string): Promise<TokenSet> {
     if (!code) {
       throw new BadRequestException('Authorization code is required');
     }
@@ -62,12 +78,15 @@ export class OutlookProvider {
     try {
       const tokenRequest = {
         code,
-        scopes: ['https://graph.microsoft.com/Mail.Read', 'https://graph.microsoft.com/User.Read'],
+        scopes: [
+          'https://graph.microsoft.com/Mail.Read',
+          'https://graph.microsoft.com/User.Read',
+          'offline_access'
+        ],
         redirectUri: this.redirectUri,
       };
 
       const response = await this.msalClient.acquireTokenByCode(tokenRequest);
-      this.logger.log('Successfully obtained tokens from authorization code');
       
       return {
         accessToken: response.accessToken,
@@ -75,45 +94,57 @@ export class OutlookProvider {
         expiresOn: response.expiresOn,
       };
     } catch (error: any) {
-      this.logger.error('Failed to exchange authorization code for tokens', error.message);
       throw new BadRequestException('Invalid or expired authorization code');
     }
   }
 
-  async listMessages(tokens: any, maxResults = 10): Promise<any[]> {
-    if (!tokens || !tokens.accessToken) {
-      throw new BadRequestException('Access token is required');
+  async refreshTokens(tokens: TokenSet): Promise<TokenSet> {
+    if (!tokens?.account) {
+      throw new BadRequestException('Account information is required for token refresh');
     }
 
     try {
-      const client = this.createGraphClient(tokens.accessToken);
+      const silentRequest = {
+        scopes: [
+          'https://graph.microsoft.com/Mail.Read',
+          'https://graph.microsoft.com/User.Read',
+          'offline_access'
+        ],
+        account: tokens.account,
+        forceRefresh: true,
+      };
+
+      const response = await this.msalClient.acquireTokenSilent(silentRequest);
       
-      const response = await client
-        .api('/me/messages')
-        .top(maxResults)
-        .select('id,subject,from,receivedDateTime,bodyPreview,hasAttachments')
-        .orderby('receivedDateTime desc')
-        .get();
-
-      if (!response.value) {
-        return [];
+      if (response.accessToken === tokens.accessToken) {
+        throw new Error('Token refresh returned same token');
       }
-
-      const messages = response.value.map((msg: any) => this.simplifyMessage(msg));
-      return messages;
+      
+      return {
+        accessToken: response.accessToken,
+        account: response.account,
+        expiresOn: response.expiresOn,
+      };
     } catch (error: any) {
-      this.logger.error('Failed to list messages', error.message);
-      
-      if (error.statusCode === 401) {
-        throw new BadRequestException('Invalid or expired tokens. Please re-authenticate.');
-      }
-      
-      throw new InternalServerErrorException('Failed to fetch messages from Outlook');
+      throw new BadRequestException('Failed to refresh tokens. Please re-authenticate.');
     }
   }
 
-  async getMessage(tokens: any, id: string): Promise<any> {
-    if (!tokens || !tokens.accessToken) {
+  async listMessages(tokens: TokenSet, maxResults = 10): Promise<ProcessedMessage> {
+    if (!tokens?.accessToken) {
+      throw new BadRequestException('Access token is required');
+    }
+
+    if (this.isTokenExpired(tokens)) {
+      const updatedTokens = await this.refreshTokens(tokens);
+      return this.fetchMessages(updatedTokens, maxResults, updatedTokens);
+    }
+
+    return this.fetchMessages(tokens, maxResults);
+  }
+
+  async getMessage(tokens: TokenSet, id: string): Promise<any> {
+    if (!tokens?.accessToken) {
       throw new BadRequestException('Access token is required');
     }
 
@@ -130,10 +161,8 @@ export class OutlookProvider {
         .expand('attachments')
         .get();
 
-      return this.simplifyMessage(message);
+      return await this.processMessage(message, tokens);
     } catch (error: any) {
-      this.logger.error(`Failed to get message ${id}`, error.message);
-      
       if (error.statusCode === 404) {
         throw new NotFoundException(`Message with ID ${id} not found`);
       }
@@ -146,8 +175,8 @@ export class OutlookProvider {
     }
   }
 
-  async getAttachment(tokens: any, messageId: string, attachmentId: string): Promise<any> {
-    if (!tokens || !tokens.accessToken) {
+  async getAttachment(tokens: TokenSet, messageId: string, attachmentId: string): Promise<any> {
+    if (!tokens?.accessToken) {
       throw new BadRequestException('Access token is required');
     }
 
@@ -162,18 +191,14 @@ export class OutlookProvider {
         .api(`/me/messages/${messageId}/attachments/${attachmentId}/$value`)
         .get();
 
-      return {
-        ...attachment,
-        content: attachmentContent,
-      };
+      return { ...attachment, content: attachmentContent };
     } catch (error: any) {
-      this.logger.error(`Failed to get attachment ${attachmentId}`, error.message);
       throw new InternalServerErrorException('Failed to fetch attachment from Outlook');
     }
   }
 
-  async searchMessages(tokens: any, query: string, maxResults = 10): Promise<any[]> {
-    if (!tokens || !tokens.accessToken) {
+  async searchMessages(tokens: TokenSet, query: string, maxResults = 10): Promise<any[]> {
+    if (!tokens?.accessToken) {
       throw new BadRequestException('Access token is required');
     }
 
@@ -184,7 +209,8 @@ export class OutlookProvider {
         .api('/me/messages')
         .filter(query)
         .top(maxResults)
-        .select('id,subject,from,receivedDateTime,bodyPreview,hasAttachments')
+        .select('id,subject,from,receivedDateTime,bodyPreview,hasAttachments,attachments')
+        .expand('attachments($select=id,name,contentType,size,isInline)')
         .orderby('receivedDateTime desc')
         .get();
 
@@ -192,23 +218,75 @@ export class OutlookProvider {
         return [];
       }
 
-      const messages = response.value.map((msg: any) => this.simplifyMessage(msg));
-      return messages;
+      return Promise.all(response.value.map((msg: any) => this.processMessage(msg, tokens)));
     } catch (error: any) {
-      this.logger.error('Failed to search messages', error.message);
       throw new InternalServerErrorException('Failed to search messages in Outlook');
+    }
+  }
+
+  private async fetchMessages(tokens: TokenSet, maxResults: number, updatedTokens?: TokenSet): Promise<ProcessedMessage> {
+    try {
+      const client = this.createGraphClient(tokens.accessToken);
+      
+      const response = await client
+        .api('/me/messages')
+        .top(maxResults)
+        .select('id,subject,from,receivedDateTime,bodyPreview,hasAttachments,attachments')
+        .expand('attachments($select=id,name,contentType,size,isInline)')
+        .orderby('receivedDateTime desc')
+        .get();
+
+      if (!response.value) {
+        return { messages: [], updatedTokens };
+      }
+
+      const messages = await Promise.all(
+        response.value.map((msg: any) => this.processMessage(msg, tokens))
+      );
+
+      return { messages, updatedTokens };
+    } catch (error: any) {
+      if (error.statusCode === 401 && !updatedTokens) {
+        const refreshedTokens = await this.refreshTokens(tokens);
+        return this.fetchMessages(refreshedTokens, maxResults, refreshedTokens);
+      }
+      
+      throw new InternalServerErrorException('Failed to fetch messages from Outlook');
     }
   }
 
   private createGraphClient(accessToken: string): Client {
     return Client.init({
+      defaultVersion: 'v1.0',
+      debugLogging: false,
       authProvider: (done) => {
         done(null, accessToken);
       },
     });
   }
 
-  private simplifyMessage(message: any): any {
+  private isTokenExpired(tokens: TokenSet): boolean {
+    const now = new Date();
+    const expiresOn = new Date(tokens.expiresOn);
+    return expiresOn <= now;
+  }
+
+  private async processMessage(message: any, tokens: TokenSet): Promise<any> {
+    const attachments = [];
+    
+    if (message.attachments) {
+      for (const att of message.attachments) {
+        const processedAttachment = await this.processAttachment({
+          id: att.id,
+          name: att.name,
+          contentType: att.contentType,
+          size: att.size,
+          isInline: att.isInline,
+        }, tokens, message.id);
+        attachments.push(processedAttachment);
+      }
+    }
+
     return {
       id: message.id,
       threadId: message.conversationId,
@@ -219,25 +297,76 @@ export class OutlookProvider {
       date: message.receivedDateTime || message.sentDateTime,
       body: message.body?.content || message.bodyPreview || '',
       hasAttachments: message.hasAttachments || false,
-      attachments: message.attachments?.map((att: any) => ({
-        id: att.id,
-        name: att.name,
-        contentType: att.contentType,
-        size: att.size,
-        isInline: att.isInline,
-      })) || [],
+      attachments: attachments,
     };
   }
 
-  async handleIcsAttachment(attachment: any): Promise<any> {
-    if (attachment.contentType === 'text/calendar' || attachment.name?.endsWith('.ics')) {
-      this.logger.log('Processing .ics file as calendar event');
+  private async processAttachment(attachment: any, tokens: TokenSet, messageId: string): Promise<any> {
+    if (this.isIcsAttachment(attachment)) {
+      const icsContent = await this.getAttachmentContent(tokens, messageId, attachment.id);
+      
       return {
         ...attachment,
         isCalendarEvent: true,
-        contentType: 'text/calendar; method=REQUEST',
+        contentType: 'text/calendar',
+        icsContent: icsContent,
+        parsedEvent: icsContent ? this.parseIcsContent(icsContent) : null,
       };
     }
     return attachment;
+  }
+
+  private isIcsAttachment(attachment: any): boolean {
+    return (
+      attachment.contentType === 'text/calendar' ||
+      attachment.contentType === 'application/ics' ||
+      attachment.name?.toLowerCase().endsWith('.ics') ||
+      attachment.name?.toLowerCase().includes('calendar')
+    );
+  }
+
+  private async getAttachmentContent(tokens: TokenSet, messageId: string, attachmentId: string): Promise<string> {
+    try {
+      const client = this.createGraphClient(tokens.accessToken);
+      
+      const response = await client
+        .api(`/me/messages/${messageId}/attachments/${attachmentId}`)
+        .get();
+        
+      if (response.contentBytes) {
+        return Buffer.from(response.contentBytes, 'base64').toString('utf-8');
+      }
+      
+      return '';
+    } catch (error) {
+      return '';
+    }
+  }
+
+  private parseIcsContent(icsContent: string): any {
+    try {
+      const lines = icsContent.split(/\r?\n/);
+      const event: any = {};
+      
+      for (const line of lines) {
+        if (line.startsWith('SUMMARY:')) {
+          event.title = line.replace('SUMMARY:', '').trim();
+        } else if (line.startsWith('DTSTART:')) {
+          event.startDate = line.replace('DTSTART:', '').trim();
+        } else if (line.startsWith('DTEND:')) {
+          event.endDate = line.replace('DTEND:', '').trim();
+        } else if (line.startsWith('LOCATION:')) {
+          event.location = line.replace('LOCATION:', '').trim();
+        } else if (line.startsWith('DESCRIPTION:')) {
+          event.description = line.replace('DESCRIPTION:', '').trim();
+        } else if (line.startsWith('ORGANIZER:')) {
+          event.organizer = line.replace('ORGANIZER:', '').replace('mailto:', '').trim();
+        }
+      }
+      
+      return event;
+    } catch (error) {
+      return null;
+    }
   }
 }
